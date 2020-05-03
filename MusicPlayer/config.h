@@ -14,23 +14,10 @@ struct Config
 	const int consecutiveInferenceThresholds[label_num] = {20, 10};
 
 	const char *output_message[label_num] = {
-		"LEFT:\n\r"
-		"          *       \n\r"
-		"       *     *    \n\r"
-		"     *         *  \n\r"
-		"    *           * \n\r"
-		"     *         *  \n\r"
-		"       *     *    \n\r"
-		"          *       \n\r",
-		"RIGHT:\n\r"
-		"        *        \n\r"
-		"       *         \n\r"
-		"      *          \n\r"
-		"     *           \n\r"
-		"    *            \n\r"
-		"   *             \n\r"
-		"  *              \n\r"
-		" * * * * * * * * \n\r"};
+		"knock\r\n",
+		"swipe\r\n"};
+
+	const char *debug_state[5] = {"0:info", "1:modesel", "2:songsel", "3:taiko", "4:score"};
 };
 
 Config config;
