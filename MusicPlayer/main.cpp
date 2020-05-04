@@ -1,5 +1,6 @@
 #include "mbed.h"
 #include "uLCD_4DGL.h"
+#include "DA7212/DA7212.h"
 
 #include "accelerometer_handler.h"
 #include "config.h"
@@ -13,20 +14,39 @@
 #include "tensorflow/lite/schema/schema_generated.h"
 #include "tensorflow/lite/version.h"
 
-//Serial pc(USBTX, USBRX, 115200);
+Serial pc(USBTX, USBRX);
 uLCD_4DGL uLCD(D1, D0, D2);
 InterruptIn sw2(SW2);
 DigitalIn sw3(SW3);
+
+DA7212 audio;
+int16_t waveform[kAudioTxBufferSize];
 Thread t;
+Thread t_audio;
 EventQueue queue(32 * EVENTS_EVENT_SIZE);
+
+char serialInBuffer[256];
+int serialCount = 0;
 
 int state = 0; //0: info  1: modesel  2: songsel  3: taiko  4: score
 int flagDraw = 0;
 int songCount = 1;
 int songSel = 0;
-int modeSel = 0;
-char* title[8] = { "Happy BDay","-","-","-","-","-","-","-" };
+int modeSel = 2;
 
+char title[8][16] = { "Happy BDay","-","-","-","-","-","-","-" };
+int notes[8][64] = {{261, 261, 392, 392, 440, 440, 392,
+					 349, 349, 330, 330, 294, 294, 261,
+					 392, 392, 349, 349, 330, 330, 294,
+					 392, 392, 349, 349, 330, 330, 294,
+					 261, 261, 392, 392, 440, 440, 392,
+					 349, 349, 330, 330, 294, 294, 261}};
+int dura[8][64] = {{1, 1, 1, 1, 1, 1, 2,
+					1, 1, 1, 1, 1, 1, 2,
+					1, 1, 1, 1, 1, 1, 2,
+					1, 1, 1, 1, 1, 1, 2,
+					1, 1, 1, 1, 1, 1, 2,
+					1, 1, 1, 1, 1, 1, 2}};
 
 int PredictGesture(float *output) {
 	// How many times the most recent gesture has been matched in a row
@@ -72,6 +92,14 @@ int PredictGesture(float *output) {
 	last_predict = -1;
 
 	return this_predict;
+}
+
+void playNote(int freq) {
+	for (int i = 0; i < kAudioTxBufferSize; i++)
+	{
+		waveform[i] = (int16_t)(sin((double)i * 2. * M_PI / (double)(kAudioSampleFrequency / freq)) * ((1 << 14) - 1));
+	}
+	audio.spk.play(waveform, kAudioTxBufferSize);
 }
 
 void draw() {
@@ -122,13 +150,28 @@ void sw2rise() {
 	flagDraw = 1;
 }
 
-void serialListener() {
+void audioThread(void) {
 
+	for (int i = 0; i < 42; i++)
+	{
+		int length = dura[0][i];
+		while (length--)
+		{
+			// the loop below will play the note for the duration of 1s
+			for (int j = 0; j < kAudioSampleFrequency / kAudioTxBufferSize; ++j)
+			{
+				queue.call(playNote, notes[0][i]);
+			}
+			if (length < 1)
+				wait(1.0);
+		}
+	}
 }
 
 int main(int argc, char *argv[]) {
-	t.start(callback(&queue, &EventQueue::dispatch_forever));
-	queue.call(serialListener);
+
+	//t.start(callback(&queue, &EventQueue::dispatch_forever));
+	//t_audio.start(audioThread);
 	sw2.rise(&sw2rise);
 
 	// Initial
@@ -220,7 +263,7 @@ int main(int argc, char *argv[]) {
 		if (gesture_index < label_num)
 		{
 			//error_reporter->Report(config.output_message[gesture_index]); // TO REMOVE
-			error_reporter->Report(config.debug_state[state]);
+			//error_reporter->Report(config.debug_state[state]);
 
 			if(state == 1) {
 				if (gesture_index == 0) {
@@ -234,6 +277,31 @@ int main(int argc, char *argv[]) {
 						flagDraw = 1;
 					}
 				}
+			} else if(state == 2) {
+				if (gesture_index == 0) {
+					if (songSel > 0) {
+						songSel--;
+						flagDraw = 1;
+					}
+				} else if (gesture_index == 1) {
+					if (songSel < songCount - 1) {
+						songSel++;
+						flagDraw = 1;
+					}
+				}
+			}
+		}
+
+		if (pc.readable())
+		{
+			serialInBuffer[serialCount] = pc.getc();
+			serialCount++;
+			if (serialInBuffer[serialCount - 1] == '@')
+			{
+				serialInBuffer[serialCount - 1] = '\0';
+				for(int i = 0; i < 16; i++) title[songCount][i] = serialInBuffer[i];
+				songCount++;
+				serialCount = 0;
 			}
 		}
 
