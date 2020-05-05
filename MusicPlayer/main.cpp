@@ -14,19 +14,21 @@
 #include "tensorflow/lite/schema/schema_generated.h"
 #include "tensorflow/lite/version.h"
 
+DA7212 audio;
+
 Serial pc(USBTX, USBRX);
 uLCD_4DGL uLCD(D1, D0, D2);
-InterruptIn sw2(SW2);
+DigitalIn sw2(SW2);
 DigitalIn sw3(SW3);
 
-DA7212 audio;
 int16_t waveform[kAudioTxBufferSize];
 Thread t;
 Thread t_audio;
 EventQueue queue(32 * EVENTS_EVENT_SIZE);
 
-char serialInBuffer[256];
+char serialInBuffer[16];
 int serialCount = 0;
+int sii = 0;
 
 int state = 0; //0: info  1: modesel  2: songsel  3: taiko  4: score
 int flagDraw = 0;
@@ -35,18 +37,14 @@ int songSel = 0;
 int modeSel = 2;
 
 char title[8][16] = { "Happy BDay","-","-","-","-","-","-","-" };
-int notes[8][64] = {{261, 261, 392, 392, 440, 440, 392,
-					 349, 349, 330, 330, 294, 294, 261,
-					 392, 392, 349, 349, 330, 330, 294,
-					 392, 392, 349, 349, 330, 330, 294,
-					 261, 261, 392, 392, 440, 440, 392,
-					 349, 349, 330, 330, 294, 294, 261}};
-int dura[8][64] = {{1, 1, 1, 1, 1, 1, 2,
-					1, 1, 1, 1, 1, 1, 2,
-					1, 1, 1, 1, 1, 1, 2,
-					1, 1, 1, 1, 1, 1, 2,
-					1, 1, 1, 1, 1, 1, 2,
-					1, 1, 1, 1, 1, 1, 2}};
+int notes[8][64] = {{261, 261, 294, 261, 349, 330,
+					 261, 261, 294, 261, 392, 349,
+					 261, 261, 523, 440, 349, 330, 294,
+					 494, 494, 440, 349, 392, 349}};
+int dura[8][64] = {{1, 1, 1, 1, 1, 2,
+					1, 1, 1, 1, 1, 2,
+					1, 1, 1, 1, 1, 1, 1,
+					1, 1, 1, 1, 1, 2}};
 
 int PredictGesture(float *output) {
 	// How many times the most recent gesture has been matched in a row
@@ -150,7 +148,7 @@ void sw2rise() {
 	flagDraw = 1;
 }
 
-void audioThread(void) {
+void audioThread() {
 
 	for (int i = 0; i < 42; i++)
 	{
@@ -168,15 +166,14 @@ void audioThread(void) {
 	}
 }
 
-int main(int argc, char *argv[]) {
-
+int main() {
 	//t.start(callback(&queue, &EventQueue::dispatch_forever));
 	//t_audio.start(audioThread);
-	sw2.rise(&sw2rise);
+	//sw2.rise(&sw2rise);
 
 	// Initial
 	draw();
-
+	
 	constexpr int kTensorArenaSize = 60 * 1024;
 	uint8_t tensor_arena[kTensorArenaSize];
 
@@ -195,7 +192,7 @@ int main(int argc, char *argv[]) {
 		//	"Model provided is schema version %d not equal "
 		//	"to supported version %d.",
 		//	model->version(), TFLITE_SCHEMA_VERSION);
-		return;
+		return -1;
 	}
 
 	static tflite::MicroOpResolver<6> micro_op_resolver;
@@ -226,7 +223,7 @@ int main(int argc, char *argv[]) {
 		(model_input->type != kTfLiteFloat32))
 	{
 		//error_reporter->Report("Bad input tensor parameters in model");
-		return;
+		return -1;
 	}
 
 	int input_length = model_input->bytes / sizeof(float);
@@ -235,7 +232,7 @@ int main(int argc, char *argv[]) {
 	if (setup_status != kTfLiteOk)
 	{
 		error_reporter->Report("Set up failed\n");
-		return;
+		return -1;
 	}
 
 	error_reporter->Report("Set up successful...\n");
@@ -262,8 +259,13 @@ int main(int argc, char *argv[]) {
 
 		if (gesture_index < label_num)
 		{
-			//error_reporter->Report(config.output_message[gesture_index]); // TO REMOVE
-			//error_reporter->Report(config.debug_state[state]);
+			for(int j = 0; j < songCount; j++) {
+				error_reporter->Report("j: %d\r\n", j);
+				for(int i = 0; i < 64; i++) {
+					if(notes[0][i] != 0) error_reporter->Report("%d, ", notes[0][i]);
+				}
+			}
+			error_reporter->Report("\r\n");
 
 			if(state == 1) {
 				if (gesture_index == 0) {
@@ -296,6 +298,8 @@ int main(int argc, char *argv[]) {
 		{
 			serialInBuffer[serialCount] = pc.getc();
 			serialCount++;
+
+			// Title
 			if (serialInBuffer[serialCount - 1] == '@')
 			{
 				serialInBuffer[serialCount - 1] = '\0';
@@ -303,6 +307,36 @@ int main(int argc, char *argv[]) {
 				songCount++;
 				serialCount = 0;
 			}
+
+			// Notes
+			if (serialInBuffer[serialCount - 1] == '#')
+			{
+				serialInBuffer[serialCount - 1] = '\0';
+				notes[songCount][sii] = (int)atoi(serialInBuffer);
+				serialCount = 0;
+				sii++;
+			}
+
+			// Duration
+			if (serialInBuffer[serialCount - 1] == '$')
+			{
+				serialInBuffer[serialCount - 1] = '\0';
+				dura[songCount][sii] = (int)atoi(serialInBuffer);
+				serialCount = 0;
+				sii++;
+			}
+
+			// Resetter
+			if (serialInBuffer[serialCount - 1] == '!')
+			{
+				serialCount = 0;
+				sii = 0;
+			}
+		}
+
+		if (!sw2) {
+			state = 1;
+			flagDraw = 1;
 		}
 
 		if(!sw3) {
