@@ -14,29 +14,29 @@
 #include "tensorflow/lite/schema/schema_generated.h"
 #include "tensorflow/lite/version.h"
 
-DA7212 audio;
+//DA7212 audio;
 
 Serial pc(USBTX, USBRX);
 uLCD_4DGL uLCD(D1, D0, D2);
-DigitalIn sw2(SW2);
+InterruptIn sw2(SW2);
 DigitalIn sw3(SW3);
 
 int16_t waveform[kAudioTxBufferSize];
-Thread t;
-Thread t_audio;
-EventQueue queue(32 * EVENTS_EVENT_SIZE);
+//Thread t;
+//Thread t_audio;
+//EventQueue queue(32 * EVENTS_EVENT_SIZE);
 
 char serialInBuffer[16];
 int serialCount = 0;
 int sii = 0;
 
-int state = 0; //0: info  1: modesel  2: songsel  3: taiko  4: score
+int state = 1; //0: info  1: modesel  2: songsel  3: taiko  4: score
 int flagDraw = 0;
 int songCount = 1;
 int songSel = 0;
 int modeSel = 2;
 
-char title[8][16] = { "Happy BDay","-","-","-","-","-","-","-" };
+char title[8][16] = { "Happy Birthday","-","-","-","-","-","-","-" };
 int notes[8][64] = {{261, 261, 294, 261, 349, 330,
 					 261, 261, 294, 261, 392, 349,
 					 261, 261, 523, 440, 349, 330, 294,
@@ -97,7 +97,7 @@ void playNote(int freq) {
 	{
 		waveform[i] = (int16_t)(sin((double)i * 2. * M_PI / (double)(kAudioSampleFrequency / freq)) * ((1 << 14) - 1));
 	}
-	audio.spk.play(waveform, kAudioTxBufferSize);
+	//audio.spk.play(waveform, kAudioTxBufferSize);
 }
 
 void draw() {
@@ -147,7 +147,7 @@ void sw2rise() {
 	state = 1;
 	flagDraw = 1;
 }
-
+/*
 void audioThread() {
 
 	for (int i = 0; i < 42; i++)
@@ -164,12 +164,13 @@ void audioThread() {
 				wait(1.0);
 		}
 	}
-}
+}*/
 
 int main() {
 	//t.start(callback(&queue, &EventQueue::dispatch_forever));
 	//t_audio.start(audioThread);
-	//sw2.rise(&sw2rise);
+	//t.start(draw);
+	sw2.rise(&sw2rise);
 
 	// Initial
 	draw();
@@ -262,7 +263,7 @@ int main() {
 			for(int j = 0; j < songCount; j++) {
 				error_reporter->Report("j: %d\r\n", j);
 				for(int i = 0; i < 64; i++) {
-					if(notes[0][i] != 0) error_reporter->Report("%d, ", notes[0][i]);
+					if(notes[j][i] != 0) error_reporter->Report("%d, ", notes[j][i]);
 				}
 			}
 			error_reporter->Report("\r\n");
@@ -293,7 +294,7 @@ int main() {
 				}
 			}
 		}
-
+		
 		if (pc.readable())
 		{
 			serialInBuffer[serialCount] = pc.getc();
@@ -318,10 +319,10 @@ int main() {
 			}
 
 			// Duration
-			if (serialInBuffer[serialCount - 1] == '$')
+			if (serialInBuffer[serialCount - 1] == '*')
 			{
 				serialInBuffer[serialCount - 1] = '\0';
-				dura[songCount][sii] = (int)atoi(serialInBuffer);
+			//	dura[songCount][sii] = (int)atoi(serialInBuffer);
 				serialCount = 0;
 				sii++;
 			}
@@ -334,19 +335,24 @@ int main() {
 			}
 		}
 
-		if (!sw2) {
-			state = 1;
-			flagDraw = 1;
-		}
-
 		if(!sw3) {
 			if(state == 1) {
 				if(modeSel == 0) {
 					// fwd
+					if (songSel < songCount - 1)
+					{
+						songSel++;
+						flagDraw = 1;
+					}
 					state = 0;
 					flagDraw = 1;
 				} else if(modeSel == 1) {
 					// bwd
+					if (songSel > 0)
+					{
+						songSel--;
+						flagDraw = 1;
+					}
 					state = 0;
 					flagDraw = 1;
 				} else if(modeSel == 2) {
@@ -354,9 +360,12 @@ int main() {
 					state = 2;
 					flagDraw = 1;
 				}
+			} else if(state == 2) {
+				state = 0;
+				flagDraw = 1;
 			}
 		}
-
+		
 		if(flagDraw == 1) {
 			draw();
 			flagDraw = 0;

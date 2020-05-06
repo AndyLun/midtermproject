@@ -3,10 +3,10 @@ import serial
 import time
 
 formatterNotes = lambda x: "%04d#" % x
-formatterDura = lambda x: "%d$" % x
+formatterDura = lambda x: "%d*" % x
 
 songCount = 1
-titles = ["Twinkle,2 Littl@"]
+titles = ["Twinkle,2 Littl@", "CDEFG@"]
 notes = [[261, 261, 392, 392, 440, 440, 392,
           349, 349, 330, 330, 294, 294, 261,
           392, 392, 349, 349, 330, 330, 294,
