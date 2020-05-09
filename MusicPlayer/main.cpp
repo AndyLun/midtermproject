@@ -22,29 +22,49 @@ InterruptIn sw2(SW2);
 DigitalIn sw3(SW3);
 
 int16_t waveform[kAudioTxBufferSize];
-//Thread t;
+
 //Thread t_audio;
-//EventQueue queue(32 * EVENTS_EVENT_SIZE);
 
 char serialInBuffer[16];
 int serialCount = 0;
 int sii = 0;
 
-int state = 1; //0: info  1: modesel  2: songsel  3: taiko  4: score
-int flagDraw = 0;
+int state = 0; //0: info  1: modesel  2: songsel  3: taiko  4: score
 int songCount = 1;
 int songSel = 0;
-int modeSel = 2;
+int modeSel = 0;
 
+
+constexpr int notesMemorySize = 64;
 char title[8][16] = { "Happy Birthday","-","-","-","-","-","-","-" };
-int notes[8][64] = {{261, 261, 294, 261, 349, 330,
-					 261, 261, 294, 261, 392, 349,
-					 261, 261, 523, 440, 349, 330, 294,
-					 494, 494, 440, 349, 392, 349}};
-int dura[8][64] = {{1, 1, 1, 1, 1, 2,
-					1, 1, 1, 1, 1, 2,
-					1, 1, 1, 1, 1, 1, 1,
-					1, 1, 1, 1, 1, 2}};
+int notes[8][notesMemorySize] = {{261, 261, 294, 261, 349, 330,
+								  261, 261, 294, 261, 392, 349,
+								  261, 261, 523, 440, 349, 330, 294,
+								  494, 494, 440, 349, 392, 349}};
+int dura[8][notesMemorySize] = {{1, 1, 1, 1, 1, 2,
+								 1, 1, 1, 1, 1, 2,
+								 1, 1, 1, 1, 1, 1, 1,
+								 1, 1, 1, 1, 1, 2}};
+
+///
+constexpr int kTensorArenaSize = 60 * 1024;
+uint8_t tensor_arena[kTensorArenaSize];
+bool should_clear_buffer = false;
+bool got_data = false;
+int gesture_index;
+static tflite::MicroErrorReporter micro_error_reporter;
+tflite::ErrorReporter *error_reporter;
+const tflite::Model *model;
+static tflite::MicroOpResolver<6> micro_op_resolver;
+tflite::MicroInterpreter *interpreter;
+TfLiteTensor *model_input;
+int input_length;
+
+Thread t_DNN;
+///
+
+Thread t;
+EventQueue queue(32 * EVENTS_EVENT_SIZE);
 
 int PredictGesture(float *output) {
 	// How many times the most recent gesture has been matched in a row
@@ -145,7 +165,7 @@ void draw() {
 
 void sw2rise() {
 	state = 1;
-	flagDraw = 1;
+	queue.call(draw);
 }
 /*
 void audioThread() {
@@ -166,79 +186,8 @@ void audioThread() {
 	}
 }*/
 
-int main() {
-	//t.start(callback(&queue, &EventQueue::dispatch_forever));
-	//t_audio.start(audioThread);
-	//t.start(draw);
-	sw2.rise(&sw2rise);
-
-	// Initial
-	draw();
-	
-	constexpr int kTensorArenaSize = 60 * 1024;
-	uint8_t tensor_arena[kTensorArenaSize];
-
-	bool should_clear_buffer = false;
-	bool got_data = false;
-
-	int gesture_index;
-
-	static tflite::MicroErrorReporter micro_error_reporter;
-	tflite::ErrorReporter *error_reporter = &micro_error_reporter;
-
-	const tflite::Model *model = tflite::GetModel(g_magic_wand_model_data);
-	if (model->version() != TFLITE_SCHEMA_VERSION)
-	{
-		//error_reporter->Report(
-		//	"Model provided is schema version %d not equal "
-		//	"to supported version %d.",
-		//	model->version(), TFLITE_SCHEMA_VERSION);
-		return -1;
-	}
-
-	static tflite::MicroOpResolver<6> micro_op_resolver;
-	micro_op_resolver.AddBuiltin(
-		tflite::BuiltinOperator_DEPTHWISE_CONV_2D,
-		tflite::ops::micro::Register_DEPTHWISE_CONV_2D());
-	micro_op_resolver.AddBuiltin(tflite::BuiltinOperator_MAX_POOL_2D,
-								 tflite::ops::micro::Register_MAX_POOL_2D());
-	micro_op_resolver.AddBuiltin(tflite::BuiltinOperator_CONV_2D,
-								 tflite::ops::micro::Register_CONV_2D());
-	micro_op_resolver.AddBuiltin(tflite::BuiltinOperator_FULLY_CONNECTED,
-								 tflite::ops::micro::Register_FULLY_CONNECTED());
-	micro_op_resolver.AddBuiltin(tflite::BuiltinOperator_SOFTMAX,
-								 tflite::ops::micro::Register_SOFTMAX());
-	micro_op_resolver.AddBuiltin(tflite::BuiltinOperator_RESHAPE,
-								 tflite::ops::micro::Register_RESHAPE(), 1);
-
-	static tflite::MicroInterpreter static_interpreter(
-		model, micro_op_resolver, tensor_arena, kTensorArenaSize, error_reporter);
-	tflite::MicroInterpreter *interpreter = &static_interpreter;
-
-	interpreter->AllocateTensors();
-
-	TfLiteTensor *model_input = interpreter->input(0);
-	if ((model_input->dims->size != 4) || (model_input->dims->data[0] != 1) ||
-		(model_input->dims->data[1] != config.seq_length) ||
-		(model_input->dims->data[2] != kChannelNumber) ||
-		(model_input->type != kTfLiteFloat32))
-	{
-		//error_reporter->Report("Bad input tensor parameters in model");
-		return -1;
-	}
-
-	int input_length = model_input->bytes / sizeof(float);
-
-	TfLiteStatus setup_status = SetupAccelerometer(error_reporter);
-	if (setup_status != kTfLiteOk)
-	{
-		error_reporter->Report("Set up failed\n");
-		return -1;
-	}
-
-	error_reporter->Report("Set up successful...\n");
-
-	while (true) {
+void DNNThread() {
+	while(true) {
 		got_data = ReadAccelerometer(error_reporter, model_input->data.f, input_length, should_clear_buffer);
 
 		if (!got_data)
@@ -260,41 +209,114 @@ int main() {
 
 		if (gesture_index < label_num)
 		{
-			for(int j = 0; j < songCount; j++) {
-				error_reporter->Report("j: %d\r\n", j);
-				for(int i = 0; i < 64; i++) {
-					if(notes[j][i] != 0) error_reporter->Report("%d, ", notes[j][i]);
+			/* debug:
+			for (int j = 0; j < songCount; j++)
+			{
+				pc.printf("j: %d\r\n", j);
+				for (int i = 0; i < notesMemorySize; i++) {
+					if (notes[j][i] != 0) pc.printf("%d, ", notes[j][i]);
+				}
+				pc.printf("\r\n");
+				for (int i = 0; i < notesMemorySize; i++) {
+					if (dura[j][i] != 0) pc.printf("%d, ", dura[j][i]);
 				}
 			}
-			error_reporter->Report("\r\n");
+			pc.printf("\r\n");
+			*/
 
-			if(state == 1) {
-				if (gesture_index == 0) {
-					if(modeSel > 0) {
+			if (state == 1)
+			{
+				if (gesture_index == 0)
+				{
+					if (modeSel > 0)
+					{
 						modeSel--;
-						flagDraw = 1;
-					}
-				} else if (gesture_index == 1) {
-					if(modeSel < 2) {
-						modeSel++;
-						flagDraw = 1;
+						queue.call(draw);
 					}
 				}
-			} else if(state == 2) {
-				if (gesture_index == 0) {
-					if (songSel > 0) {
-						songSel--;
-						flagDraw = 1;
+				else if (gesture_index == 1)
+				{
+					if (modeSel < 2)
+					{
+						modeSel++;
+						queue.call(draw);
 					}
-				} else if (gesture_index == 1) {
-					if (songSel < songCount - 1) {
+				}
+			}
+			else if (state == 2)
+			{
+				if (gesture_index == 0)
+				{
+					if (songSel > 0)
+					{
+						songSel--;
+						queue.call(draw);
+					}
+				}
+				else if (gesture_index == 1)
+				{
+					if (songSel < songCount - 1)
+					{
 						songSel++;
-						flagDraw = 1;
+						queue.call(draw);
 					}
 				}
 			}
 		}
-		
+	}
+}
+
+int main() {
+	t.start(callback(&queue, &EventQueue::dispatch_forever));
+	//t_audio.start(audioThread);
+	//t.start(draw);
+	sw2.rise(&sw2rise);
+
+	// Initial
+	uLCD.baudrate(256000);
+	queue.call(draw);
+	
+	///
+	error_reporter = &micro_error_reporter;
+	model = tflite::GetModel(g_magic_wand_model_data);
+	if (model->version() != TFLITE_SCHEMA_VERSION)
+	{
+		error_reporter->Report(
+			"Model provided is schema version %d not equal "
+			"to supported version %d.",
+			model->version(), TFLITE_SCHEMA_VERSION);
+		return -1;
+	}
+	micro_op_resolver.AddBuiltin(tflite::BuiltinOperator_DEPTHWISE_CONV_2D, tflite::ops::micro::Register_DEPTHWISE_CONV_2D());
+	micro_op_resolver.AddBuiltin(tflite::BuiltinOperator_MAX_POOL_2D, tflite::ops::micro::Register_MAX_POOL_2D());
+	micro_op_resolver.AddBuiltin(tflite::BuiltinOperator_CONV_2D, tflite::ops::micro::Register_CONV_2D());
+	micro_op_resolver.AddBuiltin(tflite::BuiltinOperator_FULLY_CONNECTED, tflite::ops::micro::Register_FULLY_CONNECTED());
+	micro_op_resolver.AddBuiltin(tflite::BuiltinOperator_SOFTMAX, tflite::ops::micro::Register_SOFTMAX());
+	micro_op_resolver.AddBuiltin(tflite::BuiltinOperator_RESHAPE, tflite::ops::micro::Register_RESHAPE(), 1);
+	static tflite::MicroInterpreter static_interpreter(model, micro_op_resolver, tensor_arena, kTensorArenaSize, error_reporter);
+	interpreter = &static_interpreter;
+	interpreter->AllocateTensors();
+	model_input = interpreter->input(0);
+	if ((model_input->dims->size != 4) || (model_input->dims->data[0] != 1) ||
+		(model_input->dims->data[1] != config.seq_length) ||
+		(model_input->dims->data[2] != kChannelNumber) ||
+		(model_input->type != kTfLiteFloat32))
+	{
+		error_reporter->Report("Bad input tensor parameters in model");
+		return -1;
+	}
+	input_length = model_input->bytes / sizeof(float);
+	TfLiteStatus setup_status = SetupAccelerometer(error_reporter);
+	if (setup_status != kTfLiteOk) {
+		error_reporter->Report("Set up failed\n");
+		return -1;
+	}
+	error_reporter->Report("Set up successful...\n");
+	///
+
+	t_DNN.start(DNNThread);
+
+	while (true) {
 		if (pc.readable())
 		{
 			serialInBuffer[serialCount] = pc.getc();
@@ -322,7 +344,7 @@ int main() {
 			if (serialInBuffer[serialCount - 1] == '*')
 			{
 				serialInBuffer[serialCount - 1] = '\0';
-			//	dura[songCount][sii] = (int)atoi(serialInBuffer);
+				dura[songCount][sii] = (int)atoi(serialInBuffer);
 				serialCount = 0;
 				sii++;
 			}
@@ -342,33 +364,28 @@ int main() {
 					if (songSel < songCount - 1)
 					{
 						songSel++;
-						flagDraw = 1;
+						queue.call(draw);
 					}
 					state = 0;
-					flagDraw = 1;
+					queue.call(draw);
 				} else if(modeSel == 1) {
 					// bwd
 					if (songSel > 0)
 					{
 						songSel--;
-						flagDraw = 1;
+						queue.call(draw);
 					}
 					state = 0;
-					flagDraw = 1;
+					queue.call(draw);
 				} else if(modeSel == 2) {
 					// chg song
 					state = 2;
-					flagDraw = 1;
+					queue.call(draw);
 				}
 			} else if(state == 2) {
 				state = 0;
-				flagDraw = 1;
+				queue.call(draw);
 			}
-		}
-		
-		if(flagDraw == 1) {
-			draw();
-			flagDraw = 0;
 		}
 	}
 }
