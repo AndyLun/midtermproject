@@ -21,6 +21,8 @@ Serial pc(USBTX, USBRX);
 uLCD_4DGL uLCD(D1, D0, D2);
 InterruptIn sw2(SW2);
 DigitalIn sw3(SW3);
+Timer debounceSw2;
+Timer debounceSw3;
 
 int16_t waveform[kAudioTxBufferSize];
 
@@ -29,6 +31,7 @@ char serialInBuffer[16];
 int serialCount = 0;
 int sii = 0;
 
+bool paused = false;
 int state = 0; //0: info  1: modesel  2: songsel  3: taiko  4: score
 int songCount = 1;
 int songSel = 0;
@@ -117,8 +120,10 @@ int PredictGesture(float *output) {
 void playNote(int freq) {
 	for (int i = 0; i < kAudioTxBufferSize; i++)
 	{
-		waveform[i] = (int16_t)(sin((double)i * 2. * M_PI / (double)(kAudioSampleFrequency / freq)) * ((1 << 14) - 1));
+		if(!paused) waveform[i] = (int16_t)(sin((double)i * 2. * M_PI / (double)(kAudioSampleFrequency / freq)) * ((1 << 14) - 1));
+		else waveform[i] = (int16_t)0;
 	}
+
 	audio.spk.play(waveform, kAudioTxBufferSize);
 }
 
@@ -165,18 +170,34 @@ void draw() {
 	}
 }
 
+void pauseAudio() {
+	paused = 1;
+}
+
+void resumeAudio() {
+	paused = 0;
+}
+
 void sw2rise() {
-	state = 1;
-	queue.call(draw);
+	if(debounceSw2.read_ms() > 500) {
+		debounceSw2.reset();
+
+		state = 1;
+		queue.call(draw);
+		queue.call(pauseAudio);
+		
+	}
 }
 
 void audioThread() {
 	while(true) {
-		for (int i = 0; i < 42; i++)
+		for (int i = 0; i < tlen[songSel]; i++)
 		{
 			int length = dura[songSel][i];
 			while (length--)
 			{
+				while(paused) { wait(0.1); }
+
 				// the loop below will play the note for the duration of 1s
 				for (int j = 0; j < kAudioSampleFrequency / kAudioTxBufferSize; ++j)
 				{
@@ -185,10 +206,12 @@ void audioThread() {
 				if (length < 1)
 					wait(0.5);
 
-				if(songSel != lastSongSel) break;
+				if(songSel != lastSongSel) goto changeSong;
 				lastSongSel = songSel;
 			}
 		}
+		changeSong:
+		lastSongSel = songSel;
 	}
 }
 
@@ -278,6 +301,8 @@ int main() {
 	t.start(callback(&queue, &EventQueue::dispatch_forever));
 	t_audio.start(audioThread);
 	sw2.rise(&sw2rise);
+	debounceSw2.start();
+	debounceSw3.start();
 
 	// Initial
 	//uLCD.baudrate(256000);
@@ -326,6 +351,7 @@ int main() {
 	while (true) {
 		if (pc.readable())
 		{
+
 			serialInBuffer[serialCount] = pc.getc();
 			serialCount++;
 
@@ -373,33 +399,37 @@ int main() {
 		}
 
 		if(!sw3) {
-			if(state == 1) {
-				if(modeSel == 0) {
-					// fwd
-					if (songSel < songCount - 1)
-					{
-						songSel++;
+			if(debounceSw3.read_ms() > 500) {
+				debounceSw3.reset();
+				if(state == 1) {
+					if(modeSel == 0) {
+						// fwd
+						if (songSel < songCount - 1)
+						{
+							songSel++;
+						}
+						state = 0;
+						queue.call(draw);
+						queue.call(resumeAudio);
+					} else if(modeSel == 1) {
+						// bwd
+						if (songSel > 0)
+						{
+							songSel--;
+						}
+						state = 0;
+						queue.call(draw);
+						queue.call(resumeAudio);
+					} else if(modeSel == 2) {
+						// chg song
+						state = 2;
 						queue.call(draw);
 					}
+				} else if(state == 2) {
 					state = 0;
 					queue.call(draw);
-				} else if(modeSel == 1) {
-					// bwd
-					if (songSel > 0)
-					{
-						songSel--;
-						queue.call(draw);
-					}
-					state = 0;
-					queue.call(draw);
-				} else if(modeSel == 2) {
-					// chg song
-					state = 2;
-					queue.call(draw);
+					queue.call(resumeAudio);
 				}
-			} else if(state == 2) {
-				state = 0;
-				queue.call(draw);
 			}
 		}
 	}
