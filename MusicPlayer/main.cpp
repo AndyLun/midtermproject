@@ -14,7 +14,8 @@
 #include "tensorflow/lite/schema/schema_generated.h"
 #include "tensorflow/lite/version.h"
 
-//DA7212 audio;
+DA7212 audio;
+Thread t_audio;
 
 Serial pc(USBTX, USBRX);
 uLCD_4DGL uLCD(D1, D0, D2);
@@ -23,7 +24,6 @@ DigitalIn sw3(SW3);
 
 int16_t waveform[kAudioTxBufferSize];
 
-//Thread t_audio;
 
 char serialInBuffer[16];
 int serialCount = 0;
@@ -33,6 +33,7 @@ int state = 0; //0: info  1: modesel  2: songsel  3: taiko  4: score
 int songCount = 1;
 int songSel = 0;
 int modeSel = 0;
+int lastSongSel = 0;
 
 
 constexpr int notesMemorySize = 64;
@@ -41,10 +42,11 @@ int notes[8][notesMemorySize] = {{261, 261, 294, 261, 349, 330,
 								  261, 261, 294, 261, 392, 349,
 								  261, 261, 523, 440, 349, 330, 294,
 								  494, 494, 440, 349, 392, 349}};
-int dura[8][notesMemorySize] = {{1, 1, 1, 1, 1, 2,
-								 1, 1, 1, 1, 1, 2,
-								 1, 1, 1, 1, 1, 1, 1,
-								 1, 1, 1, 1, 1, 2}};
+int dura[8][notesMemorySize] = {{3, 1, 4, 4, 4, 8,
+								 3, 1, 4, 4, 4, 8,
+								 3, 1, 4, 4, 4, 4, 4,
+								 3, 1, 4, 4, 4, 8}};
+int tlen[8] = {25};
 
 ///
 constexpr int kTensorArenaSize = 60 * 1024;
@@ -117,7 +119,7 @@ void playNote(int freq) {
 	{
 		waveform[i] = (int16_t)(sin((double)i * 2. * M_PI / (double)(kAudioSampleFrequency / freq)) * ((1 << 14) - 1));
 	}
-	//audio.spk.play(waveform, kAudioTxBufferSize);
+	audio.spk.play(waveform, kAudioTxBufferSize);
 }
 
 void draw() {
@@ -167,24 +169,28 @@ void sw2rise() {
 	state = 1;
 	queue.call(draw);
 }
-/*
-void audioThread() {
 
-	for (int i = 0; i < 42; i++)
-	{
-		int length = dura[0][i];
-		while (length--)
+void audioThread() {
+	while(true) {
+		for (int i = 0; i < 42; i++)
 		{
-			// the loop below will play the note for the duration of 1s
-			for (int j = 0; j < kAudioSampleFrequency / kAudioTxBufferSize; ++j)
+			int length = dura[songSel][i];
+			while (length--)
 			{
-				queue.call(playNote, notes[0][i]);
+				// the loop below will play the note for the duration of 1s
+				for (int j = 0; j < kAudioSampleFrequency / kAudioTxBufferSize; ++j)
+				{
+					queue.call(playNote, notes[songSel][i]);
+				}
+				if (length < 1)
+					wait(0.5);
+
+				if(songSel != lastSongSel) break;
+				lastSongSel = songSel;
 			}
-			if (length < 1)
-				wait(1.0);
 		}
 	}
-}*/
+}
 
 void DNNThread() {
 	while(true) {
@@ -209,7 +215,7 @@ void DNNThread() {
 
 		if (gesture_index < label_num)
 		{
-			/* debug:
+			/* debug: */
 			for (int j = 0; j < songCount; j++)
 			{
 				pc.printf("j: %d\r\n", j);
@@ -220,9 +226,11 @@ void DNNThread() {
 				for (int i = 0; i < notesMemorySize; i++) {
 					if (dura[j][i] != 0) pc.printf("%d, ", dura[j][i]);
 				}
+				pc.printf("\r\n");
+				pc.printf("TLEN: %d\r\n", tlen[j]);
 			}
 			pc.printf("\r\n");
-			*/
+			
 
 			if (state == 1)
 			{
@@ -268,12 +276,11 @@ void DNNThread() {
 
 int main() {
 	t.start(callback(&queue, &EventQueue::dispatch_forever));
-	//t_audio.start(audioThread);
-	//t.start(draw);
+	t_audio.start(audioThread);
 	sw2.rise(&sw2rise);
 
 	// Initial
-	uLCD.baudrate(256000);
+	//uLCD.baudrate(256000);
 	queue.call(draw);
 	
 	///
@@ -347,6 +354,14 @@ int main() {
 				dura[songCount][sii] = (int)atoi(serialInBuffer);
 				serialCount = 0;
 				sii++;
+			}
+
+			// Total Length
+			if (serialInBuffer[serialCount - 1] == '$')
+			{
+				serialInBuffer[serialCount - 1] = '\0';
+				tlen[songCount] = (int)atoi(serialInBuffer);
+				serialCount = 0;
 			}
 
 			// Resetter

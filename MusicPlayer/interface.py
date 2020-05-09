@@ -3,7 +3,8 @@ import serial
 import time
 
 formatterNotes = lambda x: "%04d#" % x
-formatterDura = lambda x: "%d*" % x
+formatterDura = lambda x: "%02d*" % x
+formatterTLen = lambda x: "%03d$" % x
 
 songCount = 1
 titles = ["Twinkle,2 Littl@"]
@@ -13,12 +14,12 @@ notes = [[261, 261, 392, 392, 440, 440, 392,
           392, 392, 349, 349, 330, 330, 294,
           261, 261, 392, 392, 440, 440, 392,
           349, 349, 330, 330, 294, 294, 261]]
-dura = [[1, 1, 1, 1, 1, 1, 2,
-         1, 1, 1, 1, 1, 1, 2,
-         1, 1, 1, 1, 1, 1, 2,
-         1, 1, 1, 1, 1, 1, 2,
-         1, 1, 1, 1, 1, 1, 2,
-         1, 1, 1, 1, 1, 1, 2]]
+dura = [[4, 4, 4, 4, 4, 4, 8,
+         4, 4, 4, 4, 4, 4, 8,
+         4, 4, 4, 4, 4, 4, 8,
+         4, 4, 4, 4, 4, 4, 8,
+         4, 4, 4, 4, 4, 4, 8,
+         4, 4, 4, 4, 4, 4, 8]]
 
 waitTime = 0.1
 serdev = '/dev/ttyACM0'
@@ -36,6 +37,11 @@ for j in range(0, songCount):
 	for i in range(0, len(dura[j])):
 		s.write(bytes(formatterDura(dura[j][i]), 'UTF-8'))
 		time.sleep(waitTime)
+	s.write(bytes("!", 'UTF-8'))
+	time.sleep(waitTime)
+
+	s.write(bytes(formatterTLen(len(notes[j])), 'UTF-8'))
+	time.sleep(waitTime)
 	s.write(bytes("!", 'UTF-8'))
 	time.sleep(waitTime)
 
